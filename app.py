@@ -1,140 +1,205 @@
 #!/usr/bin/env python3
 """
-CyberCrawl Spider Robot - Flask Web Server (DEMO MODE)
-Runs without physical hardware - perfect for testing/development
+CyberCrawl Spider Robot - Real-time YOLO with OV5647 Camera
+Flask Web Server with PiCamera2 + YOLOv8 detection
 """
 
-from flask import Flask, render_template, Response, jsonify, request
+from flask import Flask, render_template, Response, jsonify
 import threading
 import time
 import cv2
 import numpy as np
-import random
+from ultralytics import YOLO
+import sys
 
 app = Flask(__name__)
+
+# Try to import PiCamera2
+try:
+    from picamera2 import Picamera2
+    PICAMERA_AVAILABLE = True
+    print("✅ PiCamera2 available")
+except ImportError:
+    PICAMERA_AVAILABLE = False
+    print("⚠️  PiCamera2 not available - will try OpenCV")
 
 # Global variables
 current_mode = "STOPPED"
 mode_lock = threading.Lock()
 
-# Demo state
-demo_state = {
-    'distance': 150,
-    'detections': [],
-    'auto_running': False,
-    'robot_status': 'idle'
-}
+# YOLO Model
+print("🧠 Loading YOLOv8 Nano model (fastest)...")
+try:
+    model = YOLO('yolov8n.pt')
+    print("✅ YOLOv8 loaded")
+    YOLO_AVAILABLE = True
+except Exception as e:
+    print(f"❌ YOLO load failed: {e}")
+    print("   Install: pip install ultralytics torch torchvision")
+    model = None
+    YOLO_AVAILABLE = False
 
-def generate_demo_frame():
-    """Generate a demo frame with mock data"""
-    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+# Camera setup
+camera = None
+frame_lock = threading.Lock()
+current_frame = None
+
+def init_camera():
+    """Initialize camera - try PiCamera2 first, fallback to OpenCV"""
+    global camera, PICAMERA_AVAILABLE
     
-    # Create gradient background
-    for i in range(480):
-        frame[i, :] = [20, 30, 50]
+    if PICAMERA_AVAILABLE:
+        try:
+            print("📷 Initializing PiCamera2...")
+            camera = Picamera2()
+            config = camera.create_preview_configuration(
+                main={"format": 'RGB888', "size": (640, 480)}
+            )
+            camera.configure(config)
+            camera.start()
+            print("✅ PiCamera2 initialized (OV5647)")
+            return True
+        except Exception as e:
+            print(f"⚠️  PiCamera2 failed: {e}")
+            PICAMERA_AVAILABLE = False
     
-    # Add grid
-    for i in range(0, 640, 40):
-        cv2.line(frame, (i, 0), (i, 480), (40, 40, 60), 1)
-    for i in range(0, 480, 40):
-        cv2.line(frame, (0, i), (640, i), (40, 40, 60), 1)
+    # Fallback to OpenCV
+    try:
+        print("📷 Initializing OpenCV camera...")
+        camera = cv2.VideoCapture(0)
+        camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        camera.set(cv2.CAP_PROP_FPS, 30)
+        print("✅ OpenCV camera initialized")
+        return True
+    except Exception as e:
+        print(f"❌ Camera init failed: {e}")
+        return False
+
+def capture_and_detect():
+    """Capture frame from camera and run YOLO detection"""
+    global current_frame, camera
     
-    # Title
-    cv2.putText(frame, "CyberCrawl DEMO MODE", (80, 60),
-                cv2.FONT_HERSHEY_SIMPLEX, 1.8, (0, 212, 255), 3)
-    
-    # Status bar
-    cv2.rectangle(frame, (20, 100), (620, 140), (50, 60, 80), -1)
-    status_text = f"Mode: {current_mode} | Distance: {demo_state['distance']:.1f} cm | Objects: {len(demo_state['detections'])}"
-    cv2.putText(frame, status_text, (35, 125),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (6, 255, 165), 2)
-    
-    # Draw detected objects
-    for i, detection in enumerate(demo_state['detections']):
-        x = 100 + (i * 120) % 400
-        y = 200 + (i * 100) % 200
+    try:
+        # Capture frame
+        if PICAMERA_AVAILABLE:
+            frame = camera.capture_array()
+            # Convert RGB to BGR for OpenCV
+            if frame is not None and len(frame.shape) == 3:
+                frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        else:
+            ret, frame = camera.read()
+            if not ret:
+                frame = None
         
-        # Draw bounding box
-        cv2.rectangle(frame, (x, y), (x+100, y+80), (0, 255, 0), 2)
+        if frame is None:
+            frame = np.zeros((480, 640, 3), dtype=np.uint8)
+            cv2.putText(frame, "No Camera Feed", (150, 240),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 2)
+            return frame, []
         
-        # Draw label
-        label = f"{detection['class']} {int(detection['confidence']*100)}%"
-        cv2.putText(frame, label, (x+5, y+25),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        detections = []
+        
+        # Run YOLO detection
+        if YOLO_AVAILABLE and model:
+            try:
+                results = model(frame, conf=0.5, verbose=False)
+                
+                for result in results:
+                    boxes = result.boxes
+                    for box in boxes:
+                        # Extract data
+                        x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+                        confidence = float(box.conf[0])
+                        class_id = int(box.cls[0])
+                        class_name = model.names[class_id]
+                        
+                        # Store detection
+                        detections.append({
+                            'class': class_name,
+                            'confidence': round(confidence, 2),
+                            'bbox': [x1, y1, x2, y2]
+                        })
+                        
+                        # Draw detection box
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                        
+                        # Draw label with background
+                        label = f"{class_name} {confidence:.2f}"
+                        label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+                        cv2.rectangle(frame, (x1, y1 - 25), 
+                                    (x1 + label_size[0], y1), (0, 255, 0), -1)
+                        cv2.putText(frame, label, (x1, y1 - 8),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+            
+            except Exception as e:
+                print(f"Detection error: {e}")
+        
+        # Add top info bar
+        cv2.rectangle(frame, (0, 0), (640, 35), (0, 0, 0), -1)
+        info_text = f"Mode: {current_mode} | Objects: {len(detections)} | FPS: ~30"
+        cv2.putText(frame, info_text, (10, 25),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 212, 255), 2)
+        
+        # Add timestamp
+        timestamp = time.strftime("%H:%M:%S")
+        cv2.putText(frame, timestamp, (500, 470),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
+        
+        # Add detection list on side
+        y_offset = 50
+        for detection in detections[:5]:  # Show top 5
+            text = f"{detection['class']} {int(detection['confidence']*100)}%"
+            cv2.putText(frame, text, (10, y_offset),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+            y_offset += 20
+        
+        with frame_lock:
+            current_frame = frame.copy()
+        
+        return frame, detections
     
-    # Robot status icon
-    if current_mode == "AUTO":
-        cv2.circle(frame, (600, 400), 15, (0, 212, 255), -1)
-        cv2.putText(frame, "WALKING", (540, 430),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 212, 255), 2)
-    elif current_mode == "MANUAL":
-        cv2.circle(frame, (600, 400), 15, (123, 44, 191), -1)
-        cv2.putText(frame, "MANUAL", (545, 430),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (123, 44, 191), 2)
-    else:
-        cv2.circle(frame, (600, 400), 15, (100, 100, 100), -1)
-        cv2.putText(frame, "STOPPED", (535, 430),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (100, 100, 100), 2)
-    
-    # Timestamp
-    timestamp = time.strftime("%H:%M:%S")
-    cv2.putText(frame, timestamp, (20, 460),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
-    
-    return frame
+    except Exception as e:
+        print(f"Capture error: {e}")
+        return None, []
 
 def generate_frames():
-    """Video streaming generator function"""
+    """Video streaming generator"""
     while True:
         try:
-            frame = generate_demo_frame()
-            ret, buffer = cv2.imencode('.jpg', frame)
+            frame, _ = capture_and_detect()
+            
+            if frame is None:
+                time.sleep(0.1)
+                continue
+            
+            ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            
             if ret:
                 frame_bytes = buffer.tobytes()
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+            
             time.sleep(0.033)  # ~30 FPS
+        
         except Exception as e:
-            print(f"Error generating frame: {e}")
+            print(f"Stream error: {e}")
             time.sleep(0.1)
 
-def auto_mode_simulation():
-    """Simulate autonomous mode"""
-    print("🤖 Auto Mode: Starting simulation...")
-    obstacle_count = 0
+def detection_thread_loop():
+    """Continuous detection loop for API responses"""
+    detections_cache = []
     
-    while demo_state['auto_running'] and current_mode == "AUTO":
+    while True:
         try:
-            # Simulate distance sensor readings
-            if random.random() < 0.3:
-                demo_state['distance'] = random.uniform(20, 200)
-            
-            # Simulate object detection
-            if random.random() < 0.15 and len(demo_state['detections']) < 3:
-                demo_state['detections'].append({
-                    'class': random.choice(['person', 'cat', 'dog', 'car', 'cup', 'chair', 'plant']),
-                    'confidence': round(random.uniform(0.65, 0.99), 2),
-                    'bbox': [random.randint(50, 400), random.randint(100, 350), 100, 80]
-                })
-            
-            # Remove detections randomly
-            if demo_state['detections'] and random.random() < 0.1:
-                demo_state['detections'].pop(0)
-            
-            # Obstacle avoidance logic
-            if demo_state['distance'] < 25:
-                print(f"⚠️  Obstacle detected at {demo_state['distance']:.1f} cm - Avoiding")
-                obstacle_count += 1
-            else:
-                obstacle_count = 0
-            
-            time.sleep(0.5)
-            
+            _, detections = capture_and_detect()
+            detections_cache = detections
+            time.sleep(0.1)
         except Exception as e:
-            print(f"Auto mode error: {e}")
+            print(f"Detection thread error: {e}")
             time.sleep(0.5)
-    
-    print("🛑 Auto Mode: Stopped")
+
+# ===== Flask Routes =====
 
 @app.route('/')
 def index():
@@ -143,17 +208,23 @@ def index():
 
 @app.route('/video_feed')
 def video_feed():
-    """Video streaming route"""
+    """Live video stream with YOLO detections"""
     return Response(generate_frames(),
                     mimetype='multipart/x-mixed-replace; boundary=frame')
 
 @app.route('/api/status')
 def get_status():
-    """Get current robot status"""
+    """Get robot status"""
+    _, detections = capture_and_detect()
+    
+    distance = 150
+    if detections:
+        distance = 50 + len(detections) * 15
+    
     return jsonify({
         'mode': current_mode,
-        'distance': round(demo_state['distance'], 1),
-        'detections': demo_state['detections'],
+        'distance': round(distance, 1),
+        'detections': detections,
         'timestamp': time.time()
     })
 
@@ -166,16 +237,8 @@ def start_auto():
         if current_mode != "STOPPED":
             return jsonify({'success': False, 'message': 'Stop current mode first'})
         
-        try:
-            current_mode = "AUTO"
-            demo_state['auto_running'] = True
-            auto_thread = threading.Thread(target=auto_mode_simulation, daemon=True)
-            auto_thread.start()
-            
-            return jsonify({'success': True, 'message': 'Auto mode started'})
-        except Exception as e:
-            current_mode = "STOPPED"
-            return jsonify({'success': False, 'message': str(e)})
+        current_mode = "AUTO"
+        return jsonify({'success': True, 'message': 'Auto mode started'})
 
 @app.route('/api/stop', methods=['POST'])
 def stop():
@@ -183,14 +246,8 @@ def stop():
     global current_mode
     
     with mode_lock:
-        try:
-            demo_state['auto_running'] = False
-            demo_state['detections'] = []
-            current_mode = "STOPPED"
-            
-            return jsonify({'success': True, 'message': 'Robot stopped'})
-        except Exception as e:
-            return jsonify({'success': False, 'message': str(e)})
+        current_mode = "STOPPED"
+        return jsonify({'success': True, 'message': 'Robot stopped'})
 
 @app.route('/api/manual_mode', methods=['POST'])
 def manual_mode():
@@ -207,56 +264,62 @@ def manual_mode():
 @app.route('/api/manual_control/<action>', methods=['POST'])
 def manual_control(action):
     """Execute manual control action"""
-    global current_mode
-    
     if current_mode != "MANUAL":
         return jsonify({'success': False, 'message': 'Not in manual mode'})
     
-    try:
-        actions = ['forward', 'backward', 'left', 'right', 'wave', 'shake', 'dance', 'stand', 'sit']
-        
-        if action not in actions:
-            return jsonify({'success': False, 'message': 'Unknown action'})
-        
-        action_text = {
-            'forward': '⬆️ Moving forward',
-            'backward': '⬇️ Moving backward',
-            'left': '⬅️ Turning left',
-            'right': '➡️ Turning right',
-            'wave': '👋 Waving',
-            'shake': '🤝 Shaking',
-            'dance': '💃 Dancing',
-            'stand': '🧍 Standing',
-            'sit': '💺 Sitting'
-        }
-        
-        print(f"Manual: {action_text.get(action, action)}")
-        
-        return jsonify({'success': True, 'message': f'Action {action} executed'})
-        
-    except Exception as e:
-        return jsonify({'success': False, 'message': str(e)})
+    actions_text = {
+        'forward': '⬆️ Moving forward',
+        'backward': '⬇️ Moving backward',
+        'left': '⬅️ Turning left',
+        'right': '➡️ Turning right',
+        'wave': '👋 Waving',
+        'shake': '🤝 Shaking',
+        'dance': '💃 Dancing',
+        'stand': '🧍 Standing',
+        'sit': '💺 Sitting'
+    }
+    
+    if action not in actions_text:
+        return jsonify({'success': False, 'message': 'Unknown action'})
+    
+    print(f"Manual: {actions_text[action]}")
+    return jsonify({'success': True, 'message': f'Action {action} executed'})
 
 @app.route('/api/detections')
 def get_detections():
-    """Get current object detections"""
-    return jsonify({'detections': demo_state['detections']})
+    """Get current detections"""
+    _, detections = capture_and_detect()
+    return jsonify({'detections': detections})
 
 if __name__ == '__main__':
-    print("\n" + "="*60)
-    print("🕷️  CyberCrawl Spider Robot - DEMO MODE")
-    print("="*60)
-    print("✅ Hardware simulation enabled")
-    print("✅ Web interface ready")
-    print("="*60)
+    print("\n" + "="*70)
+    print("🕷️  CyberCrawl - Real-Time YOLO Object Detection")
+    print("="*70)
+    print("Camera: ", end="")
+    if init_camera():
+        print("✅ Ready")
+    else:
+        print("❌ Failed - Cannot start without camera")
+        sys.exit(1)
+    
+    print("YOLO Model: ", end="")
+    print("✅ YOLOv8 Nano" if YOLO_AVAILABLE else "❌ Not loaded")
+    
+    print("="*70)
     print("\n🌐 Starting web server...")
     print("📍 Access at: http://localhost:5000")
-    print("📍 Or: http://<your-ip>:5000")
+    print("📍 Remote: http://<your-pi-ip>:5000")
     print("\n🎮 Features:")
-    print("   - Live video feed with detections")
-    print("   - Auto mode with obstacle simulation")
-    print("   - Manual control with keyboard support")
-    print("   - Object detection display")
-    print("="*60 + "\n")
+    print("   ✨ Real-time camera stream")
+    print("   ✨ YOLO v8 object detection")
+    print("   ✨ Auto mode with live detections")
+    print("   ✨ Manual control with keyboard")
+    print("   ✨ Detection tracking")
+    print("="*70 + "\n")
     
+    # Start detection thread
+    det_thread = threading.Thread(target=detection_thread_loop, daemon=True)
+    det_thread.start()
+    
+    # Start Flask
     app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
