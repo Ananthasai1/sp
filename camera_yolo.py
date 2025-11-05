@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Enhanced Camera and YOLOv8 Object Detection Module
-Fixed for libcamera-only systems with proper YOLOv8 support
+Fixed for libcamera systems with proper auto-exposure handling
 """
 
 import cv2
@@ -9,8 +9,12 @@ import numpy as np
 import threading
 import time
 from collections import deque
-import config
 import os
+import sys
+
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import config
 
 try:
     from ultralytics import YOLO
@@ -108,12 +112,30 @@ class EnhancedCameraYOLO:
             self.camera.set(cv2.CAP_PROP_FPS, config.CAMERA_FPS)
             self.camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Reduce latency
             
-            # Warmup frames
-            print("     🔄 Warmup frames...")
-            for i in range(10):
-                ret, _ = self.camera.read()
-                if ret:
-                    print(f"     ✅ Warmup {i+1}/10")
+            # Increase exposure for better image (libcamera adjustment)
+            self.camera.set(cv2.CAP_PROP_EXPOSURE, -5)  # Auto exposure
+            self.camera.set(cv2.CAP_PROP_BRIGHTNESS, 50)
+            
+            print("     ⏳ Waiting for camera auto-exposure (this takes time!)...")
+            
+            # CRITICAL: Long warmup for libcamera auto-exposure
+            # The camera returns black frames until it auto-exposes
+            for i in range(60):  # 6 seconds at 0.1s per frame
+                ret, frame = self.camera.read()
+                
+                # Check if frame is valid (not all black)
+                if ret and frame is not None and frame.size > 0:
+                    # Check if frame has actual data (not all zeros)
+                    if frame.max() > 10:  # If max pixel value > 10, it's exposing
+                        print(f"     ✅ Frame {i+1}: Auto-exposure detected!")
+                        # Get a few more frames to stabilize
+                        for j in range(5):
+                            self.camera.read()
+                            time.sleep(0.05)
+                        break
+                
+                if i % 10 == 0:
+                    print(f"     ⏳ Warmup {i+1}/60 (waiting for exposure)...")
                 time.sleep(0.1)
             
             print("  ✅ OpenCV camera ready (libcamera backend)")
@@ -125,6 +147,7 @@ class EnhancedCameraYOLO:
             print("     1. Enable camera: sudo raspi-config → Interface → Camera → Enable")
             print("     2. Test: libcamera-hello -t 3000")
             print("     3. Check devices: ls -la /dev/video*")
+            print("     4. Check permissions: sudo usermod -a -G video $USER")
             self.camera = None
             self.camera_type = 'none'
     
@@ -163,12 +186,23 @@ class EnhancedCameraYOLO:
                 if frame.shape[0] != config.CAMERA_RESOLUTION[1] or frame.shape[1] != config.CAMERA_RESOLUTION[0]:
                     frame = cv2.resize(frame, config.CAMERA_RESOLUTION)
                 
-                # Validate frame (check if not all black/white)
-                if frame.max() < 5 or frame.min() > 250:
+                # Validate frame (check if not completely invalid)
+                # Skip frames that are all black (value < 5) but allow startup
+                if frame.max() < 3:
                     frame_errors += 1
-                    if frame_errors > 3:
-                        print("  ⚠️  Invalid frame detected")
+                    if frame_errors > 20:  # Only error after many bad frames
+                        print("  ⚠️  Camera still producing black frames")
                         frame_errors = 0
+                    time.sleep(0.05)
+                    continue
+                
+                # Skip frames that are all white (value > 250)
+                if frame.min() > 250:
+                    frame_errors += 1
+                    if frame_errors > 10:
+                        print("  ⚠️  Camera producing all-white frames")
+                        frame_errors = 0
+                    time.sleep(0.05)
                     continue
                 
                 # Store frame
@@ -204,10 +238,13 @@ class EnhancedCameraYOLO:
         for i in range(frame.shape[0]):
             frame[i, :] = [20 + i//8, 15 + i//10, 35 + i//12]
         
-        cv2.putText(frame, "Camera Initializing", (80, 200),
+        # Draw messages
+        cv2.putText(frame, "Waiting for camera...", (100, 200),
                    cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 165, 255), 2)
-        cv2.putText(frame, "Please wait...", (120, 260),
+        cv2.putText(frame, "Auto-exposure in progress", (80, 260),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (100, 200, 255), 2)
+        cv2.putText(frame, "This can take 10-30 seconds", (60, 320),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (150, 150, 255), 1)
         
         return frame
     
@@ -237,7 +274,7 @@ class EnhancedCameraYOLO:
                     conf=config.YOLO_CONFIDENCE_THRESHOLD,
                     iou=config.YOLO_IOU_THRESHOLD,
                     verbose=False,
-                    device=0  # 0 for CPU, or GPU id if available
+                    device=0  # 0 for CPU
                 )
                 
                 detections = []
