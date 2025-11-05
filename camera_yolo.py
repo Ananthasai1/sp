@@ -368,8 +368,13 @@ class EnhancedCameraYOLO:
         """Get frame with bounding boxes and annotations"""
         with self.frame_lock:
             if self.frame is None:
-                return None
+                # Return placeholder if no frame available yet
+                return self._generate_placeholder()
             frame = self.frame.copy()
+        
+        # Validate frame before processing
+        if frame is None or frame.size == 0:
+            return self._generate_placeholder()
         
         with self.detection_lock:
             detections = self.detections.copy()
