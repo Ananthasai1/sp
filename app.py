@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-CyberCrawl Spider Robot - Enhanced Flask Server with YOLO
+CyberCrawl Spider Robot - Enhanced Flask Server with YOLOv12
 Live camera feed streaming with object detection
 """
 
@@ -17,16 +17,23 @@ app = Flask(__name__)
 # Global variables
 current_mode = "STOPPED"
 mode_lock = threading.Lock()
+camera_ready = False
 
 # Camera and detection
 try:
-    print("🎥 Initializing camera...")
+    print("\n" + "="*70)
+    print("🎥 Initializing camera system...")
     camera = EnhancedCameraYOLO()
+    time.sleep(2)  # Give camera time to initialize
     camera.start_detection()
+    camera_ready = True
     print("✅ Camera ready!")
+    print("="*70 + "\n")
 except Exception as e:
     print(f"❌ Camera initialization failed: {e}")
+    print("⚠️  System will run in fallback mode")
     camera = None
+    camera_ready = False
 
 # Detection mode states
 detection_state = {
@@ -36,18 +43,20 @@ detection_state = {
 
 def generate_frames():
     """Video streaming generator with live camera feed and YOLO detections"""
-    print("📹 Starting video stream...")
+    print("🎬 Starting video stream...")
     frame_count = 0
     last_log = time.time()
     
     while True:
         try:
-            if camera is None:
+            if camera is None or not camera_ready:
                 # No camera available - show error frame
                 frame = np.zeros((config.CAMERA_RESOLUTION[1], 
                                 config.CAMERA_RESOLUTION[0], 3), dtype=np.uint8)
-                cv2.putText(frame, "NO CAMERA AVAILABLE", (100, 240),
-                           cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 3)
+                cv2.putText(frame, "CAMERA NOT INITIALIZED", (80, 200),
+                           cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 2)
+                cv2.putText(frame, "Check camera connection", (100, 250),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 165, 255), 2)
             else:
                 # Get live camera frame with detections
                 frame = camera.get_frame_with_detections()
@@ -74,7 +83,7 @@ def generate_frames():
                 print(f"  📊 Streaming: {frame_count} frames sent")
                 last_log = current_time
             
-            time.sleep(0.01)  # ~100 FPS capability
+            time.sleep(0.01)
             
         except Exception as e:
             print(f"❌ Frame generation error: {e}")
@@ -87,7 +96,7 @@ def auto_mode_detection():
     
     while current_mode == "AUTO" and detection_state['auto_detection_active']:
         try:
-            if camera:
+            if camera and camera_ready:
                 detections = camera.get_detections()
                 
                 # Process detections for obstacle avoidance
@@ -114,37 +123,12 @@ def manual_mode_detection():
     """Optimized detection for manual mode"""
     print("⚙️ Manual mode detection: CONTINUOUS TRACKING")
     detection_state['manual_detection_active'] = True
-    tracked_objects = {}
     
     while current_mode == "MANUAL" and detection_state['manual_detection_active']:
         try:
-            if camera:
+            if camera and camera_ready:
                 detections = camera.get_detections()
-                
-                # Update tracking
-                current_ids = set()
-                for det in detections:
-                    class_name = det['class']
-                    conf = det['confidence']
-                    center = (det['center_x'], det['center_y'])
-                    
-                    obj_id = f"{class_name}_{int(det['center_x']/50)}"
-                    current_ids.add(obj_id)
-                    
-                    tracked_objects[obj_id] = {
-                        'class': class_name,
-                        'confidence': conf,
-                        'center': center,
-                        'bbox': det['bbox'],
-                        'timestamp': time.time()
-                    }
-                
-                # Clean old tracks
-                now = time.time()
-                tracked_objects = {
-                    k: v for k, v in tracked_objects.items()
-                    if now - v['timestamp'] < 2.0
-                }
+                # Detections are automatically displayed in the video feed
             
             time.sleep(0.033)
             
@@ -160,7 +144,7 @@ def manual_mode_detection():
 @app.route('/')
 def index():
     """Main page"""
-    return render_template('index.html')
+    return render_template('index.html', camera_ready=camera_ready)
 
 @app.route('/video_feed')
 def video_feed():
@@ -171,13 +155,13 @@ def video_feed():
 @app.route('/api/status')
 def get_status():
     """Get robot status"""
-    if camera:
+    if camera and camera_ready:
         detections = camera.get_detections()
         stats = camera.get_performance_stats()
         distance = 150.0  # Placeholder
     else:
         detections = []
-        stats = {'fps': 0, 'night_mode': False, 'detections_count': 0}
+        stats = {'fps': 0, 'detections_count': 0}
         distance = -1
     
     return jsonify({
@@ -185,8 +169,8 @@ def get_status():
         'distance': distance,
         'detections': detections,
         'fps': stats['fps'],
-        'night_vision': stats['night_mode'],
         'detection_count': stats['detections_count'],
+        'camera_ready': camera_ready,
         'timestamp': time.time()
     })
 
@@ -256,7 +240,7 @@ def stop():
 @app.route('/api/detections')
 def get_detections():
     """Get current detections"""
-    if camera:
+    if camera and camera_ready:
         detections = camera.get_detections()
     else:
         detections = []
@@ -270,10 +254,10 @@ def get_detections():
 @app.route('/api/performance')
 def get_performance():
     """Get performance metrics"""
-    if camera:
+    if camera and camera_ready:
         stats = camera.get_performance_stats()
     else:
-        stats = {'fps': 0, 'night_mode': False, 'detections_count': 0}
+        stats = {'fps': 0, 'detections_count': 0}
     
     return jsonify(stats)
 
@@ -312,11 +296,10 @@ def manual_control(action):
 
 if __name__ == '__main__':
     print("\n" + "="*70)
-    print("🕷️  CyberCrawl Spider Robot - Enhanced YOLO Detection")
+    print("🕷️  CyberCrawl Spider Robot - YOLOv12 Detection System")
     print("="*70)
     print("✅ Live camera feed enabled")
-    print("✅ Real-time YOLO object detection")
-    print("✅ Night vision with auto IR LED control")
+    print("✅ Real-time YOLOv12 object detection")
     print("✅ Separate detection modes (Auto/Manual)")
     print("✅ Bounding boxes with confidence scores")
     print("="*70)
@@ -325,9 +308,8 @@ if __name__ == '__main__':
     print("📍 Or: http://<your-raspberry-pi-ip>:5000")
     print("\n🎮 Features:")
     print("   - Live camera stream with detections")
-    print("   - Person, object detection with boxes")
+    print("   - YOLOv12 object detection with boxes")
     print("   - FPS counter and performance metrics")
-    print("   - Night vision indicator")
     print("   - Auto & Manual modes")
     print("="*70 + "\n")
     

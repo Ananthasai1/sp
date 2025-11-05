@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🕷️ CyberCrawl - Spider Robot Control</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="stars"></div>
+    <div class="container">
+        <!-- Animated Header -->
+        <header class="header">
+            <div class="title">
+                <div class="spider-icon">🕷️</div>
+                <h1>CyberCrawl</h1>
+                <p class="subtitle">Spider Robot Control System</p>
+            </div>
+            <div class="status-badge" id="statusBadge">
+                <span class="status-dot"></span>
+                <span class="status-text">INITIALIZING</span>
+            </div>
+        </header>
+
+        <!-- Main Content Grid -->
+        <div class="main-grid">
+            <!-- Video Feed Section -->
+            <div class="panel video-panel">
+                <div class="panel-header">
+                    <div>
+                        <h2>📹 Live Feed</h2>
+                        <p class="panel-subtitle">YOLOv12 Detection</p>
+                    </div>
+                    <div class="detection-badge" id="detectionCount">
+                        <span class="badge-value">0</span>
+                        <span class="badge-label">Objects</span>
+                    </div>
+                </div>
+                
+                <div class="video-wrapper">
+                    <div class="video-container">
+                        <img id="videoFeed" src="{{ url_for('video_feed') }}" alt="Video Feed">
+                        <div class="overlay-info">
+                            <div class="info-box distance">
+                                <span class="icon">📏</span>
+                                <span class="value" id="distanceValue">-- cm</span>
+                            </div>
+                            <div class="info-box fps">
+                                <span class="icon">⚡</span>
+                                <span class="value" id="fpsValue">-- FPS</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="detections-container">
+                    <div class="detections-list" id="detectionsList">
+                        <!-- Detections dynamically added -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Control Panel Section -->
+            <div class="panel control-panel">
+                <div class="panel-header">
+                    <h2>🎮 Control</h2>
+                </div>
+
+                <!-- Mode Buttons -->
+                <div class="mode-buttons">
+                    <button id="btnAutoMode" class="btn btn-auto" onclick="startAutoMode()" title="Start autonomous navigation">
+                        <span class="btn-emoji">🤖</span>
+                        <span>Auto</span>
+                    </button>
+                    <button id="btnManualMode" class="btn btn-manual" onclick="enableManualMode()" title="Switch to manual control">
+                        <span class="btn-emoji">⚙️</span>
+                        <span>Manual</span>
+                    </button>
+                    <button id="btnStop" class="btn btn-stop" onclick="stopRobot()" title="Stop all movement">
+                        <span class="btn-emoji">🛑</span>
+                        <span>Stop</span>
+                    </button>
+                </div>
+
+                <!-- Manual Controls (Hidden initially) -->
+                <div id="manualControls" class="manual-controls">
+                    <h3>Direction</h3>
+                    <div class="direction-pad">
+                        <div class="pad-grid">
+                            <div></div>
+                            <button class="btn-dir up" onclick="manualControl('forward')" title="Move forward">
+                                ⬆️
+                            </button>
+                            <div></div>
+                            
+                            <button class="btn-dir left" onclick="manualControl('left')" title="Turn left">
+                                ⬅️
+                            </button>
+                            <div class="center-spider">🕷️</div>
+                            <button class="btn-dir right" onclick="manualControl('right')" title="Turn right">
+                                ➡️
+                            </button>
+                            
+                            <div></div>
+                            <button class="btn-dir down" onclick="manualControl('backward')" title="Move backward">
+                                ⬇️
+                            </button>
+                            <div></div>
+                        </div>
+                    </div>
+
+                    <h3>Actions</h3>
+                    <div class="action-buttons">
+                        <button class="btn btn-action" onclick="manualControl('wave')" title="Wave hand">👋 Wave</button>
+                        <button class="btn btn-action" onclick="manualControl('shake')" title="Shake hand">🤝 Shake</button>
+                        <button class="btn btn-action" onclick="manualControl('dance')" title="Dance">💃 Dance</button>
+                        <button class="btn btn-action" onclick="manualControl('stand')" title="Stand up">🧍 Stand</button>
+                        <button class="btn btn-action" onclick="manualControl('sit')" title="Sit down">💺 Sit</button>
+                    </div>
+                </div>
+
+                <!-- Status Panel -->
+                <div class="status-panel">
+                    <div class="status-row">
+                        <span class="status-label">Mode</span>
+                        <span class="status-value" id="modeText">STOPPED</span>
+                    </div>
+                    <div class="status-row">
+                        <span class="status-label">Distance</span>
+                        <span class="status-value" id="distanceText">-- cm</span>
+                    </div>
+                    <div class="status-row">
+                        <span class="status-label">Objects</span>
+                        <span class="status-value" id="objectsText">0</span>
+                    </div>
+                    <div class="status-row">
+                        <span class="status-label">FPS</span>
+                        <span class="status-value" id="fpsText">-- fps</span>
+                    </div>
+                </div>
+
+                <div class="keyboard-hint">
+                    <p>⌨️ Arrow keys or WASD in manual mode</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>🕷️ CyberCrawl © 2025 | Powered by Raspberry Pi 3 & YOLOv12</p>
+        </footer>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="toast"></div>
+
+    <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+</body>
+</html>
