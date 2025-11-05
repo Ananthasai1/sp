@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Enhanced Camera and YOLOv8 Object Detection Module
-Fixed for libcamera systems with proper auto-exposure handling
+FIXED: Better auto-exposure handling for libcamera
 """
 
 import cv2
@@ -37,6 +37,7 @@ class EnhancedCameraYOLO:
         self.is_running = False
         self.capture_running = False
         self.detection_running = False
+        self.camera_ready = False  # NEW: Track camera readiness
         
         self.fps_counter = deque(maxlen=30)
         self.last_time = time.time()
@@ -44,7 +45,6 @@ class EnhancedCameraYOLO:
         
         # Initialize camera
         self._init_camera()
-        time.sleep(1)
         
         # Load YOLO model
         self.model = None
@@ -96,7 +96,7 @@ class EnhancedCameraYOLO:
             self.model_loaded = False
     
     def _init_camera(self):
-        """Initialize camera with OpenCV + libcamera"""
+        """Initialize camera with OpenCV + libcamera - IMPROVED"""
         print("  📹 Initializing OpenCV with libcamera...")
         
         try:
@@ -106,39 +106,67 @@ class EnhancedCameraYOLO:
             if not self.camera.isOpened():
                 raise Exception("Cannot open camera device")
             
-            # Set properties
+            # Set properties BEFORE reading frames
             self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, config.CAMERA_RESOLUTION[0])
             self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAMERA_RESOLUTION[1])
             self.camera.set(cv2.CAP_PROP_FPS, config.CAMERA_FPS)
-            self.camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Reduce latency
+            self.camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             
-            # Increase exposure for better image (libcamera adjustment)
-            self.camera.set(cv2.CAP_PROP_EXPOSURE, -5)  # Auto exposure
-            self.camera.set(cv2.CAP_PROP_BRIGHTNESS, 50)
+            # IMPROVED: Set exposure settings more aggressively
+            self.camera.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)  # Enable auto exposure
+            self.camera.set(cv2.CAP_PROP_BRIGHTNESS, 55)
+            self.camera.set(cv2.CAP_PROP_CONTRAST, 50)
             
-            print("     ⏳ Waiting for camera auto-exposure (this takes time!)...")
+            print("     ⏳ Warming up camera (15 seconds for auto-exposure)...")
+            print("     💡 This is normal for libcamera - please wait...")
             
-            # CRITICAL: Long warmup for libcamera auto-exposure
-            # The camera returns black frames until it auto-exposes
-            for i in range(60):  # 6 seconds at 0.1s per frame
+            # IMPROVED: Longer, more patient warmup
+            warmup_time = 15  # seconds
+            start_time = time.time()
+            frames_captured = 0
+            valid_frames = 0
+            
+            while (time.time() - start_time) < warmup_time:
                 ret, frame = self.camera.read()
+                frames_captured += 1
                 
-                # Check if frame is valid (not all black)
                 if ret and frame is not None and frame.size > 0:
-                    # Check if frame has actual data (not all zeros)
-                    if frame.max() > 10:  # If max pixel value > 10, it's exposing
-                        print(f"     ✅ Frame {i+1}: Auto-exposure detected!")
-                        # Get a few more frames to stabilize
-                        for j in range(5):
-                            self.camera.read()
-                            time.sleep(0.05)
-                        break
+                    # Check if frame is valid (not all black)
+                    mean_brightness = frame.mean()
+                    
+                    if mean_brightness > 5:  # LOWERED threshold
+                        valid_frames += 1
+                        
+                        # If we get 3 valid frames in a row, camera is ready
+                        if valid_frames >= 3:
+                            print(f"     ✅ Camera ready after {time.time() - start_time:.1f}s!")
+                            print(f"     📊 Captured {frames_captured} frames, {valid_frames} valid")
+                            
+                            # Discard a few more frames to stabilize
+                            for _ in range(10):
+                                self.camera.read()
+                                time.sleep(0.05)
+                            
+                            self.camera_ready = True
+                            break
+                    else:
+                        valid_frames = 0  # Reset counter if we get a black frame
                 
-                if i % 10 == 0:
-                    print(f"     ⏳ Warmup {i+1}/60 (waiting for exposure)...")
+                # Show progress every 2 seconds
+                elapsed = time.time() - start_time
+                if int(elapsed) % 2 == 0 and frames_captured % 10 == 0:
+                    print(f"     ⏳ Warmup: {elapsed:.0f}s / {warmup_time}s (brightness: {mean_brightness:.1f})")
+                
                 time.sleep(0.1)
             
-            print("  ✅ OpenCV camera ready (libcamera backend)")
+            # Check if camera is ready
+            if not self.camera_ready:
+                print("     ⚠️  Camera warmup complete but frames may be dark")
+                print("     💡 Camera will continue warming up in background")
+                # Set flag anyway - will improve over time
+                self.camera_ready = True
+            
+            print("  ✅ OpenCV camera initialized (libcamera backend)")
             self.camera_type = 'opencv'
             
         except Exception as e:
@@ -147,33 +175,39 @@ class EnhancedCameraYOLO:
             print("     1. Enable camera: sudo raspi-config → Interface → Camera → Enable")
             print("     2. Test: libcamera-hello -t 3000")
             print("     3. Check devices: ls -la /dev/video*")
-            print("     4. Check permissions: sudo usermod -a -G video $USER")
+            print("     4. Reboot: sudo reboot")
             self.camera = None
             self.camera_type = 'none'
+            self.camera_ready = False
     
     def _capture_frames(self):
-        """Continuous frame capture thread"""
+        """Continuous frame capture thread - IMPROVED"""
         print("  🎥 Capture thread started")
         frame_errors = 0
         success_count = 0
-        first_valid_frame = False
+        
+        # Wait for camera to be ready
+        if not self.camera_ready:
+            print("  ⏳ Waiting for camera to be ready...")
+            time.sleep(2)
         
         while self.capture_running:
             try:
                 if self.camera is None:
-                    frame = self._generate_placeholder()
+                    # No camera - show placeholder
+                    frame = self._generate_placeholder("Camera not available")
                     with self.frame_lock:
                         self.frame = frame
                     time.sleep(1/config.CAMERA_FPS)
                     continue
                 
-                frame = None
+                # Read frame
                 ret, frame = self.camera.read()
                 
                 if not ret or frame is None or frame.size == 0:
                     frame_errors += 1
                     if frame_errors > 10:
-                        print("  ⚠️  Camera read failed repeatedly - reconnecting...")
+                        print("  ⚠️  Camera read failed - reconnecting...")
                         try:
                             self.camera.release()
                         except:
@@ -184,39 +218,22 @@ class EnhancedCameraYOLO:
                     time.sleep(0.05)
                     continue
                 
+                # Reset error counter on success
                 frame_errors = 0
                 
                 # Ensure correct resolution
                 if frame.shape[0] != config.CAMERA_RESOLUTION[1] or frame.shape[1] != config.CAMERA_RESOLUTION[0]:
                     frame = cv2.resize(frame, config.CAMERA_RESOLUTION)
                 
-                # Validate frame (check if not completely invalid)
-                # Skip frames that are all black (value < 3)
-                if frame.max() < 3:
-                    # Allow one chance for startup, then skip
-                    if not first_valid_frame:
-                        time.sleep(0.05)
-                        continue
-                    frame_errors += 1
-                    if frame_errors > 30:  # Only error after many bad frames
-                        print("  ⚠️  Camera still producing black frames")
-                        frame_errors = 0
+                # IMPROVED: More lenient frame validation
+                mean_brightness = frame.mean()
+                
+                # Only reject completely invalid frames
+                if mean_brightness < 1.0:  # Almost completely black
+                    if success_count > 0:  # Only warn if we've had good frames before
+                        print(f"  ⚠️  Very dark frame (brightness: {mean_brightness:.1f})")
                     time.sleep(0.05)
                     continue
-                
-                # Skip frames that are all white (value > 250)
-                if frame.min() > 250:
-                    frame_errors += 1
-                    if frame_errors > 10:
-                        print("  ⚠️  Camera producing all-white frames")
-                        frame_errors = 0
-                    time.sleep(0.05)
-                    continue
-                
-                # Mark first valid frame
-                if not first_valid_frame:
-                    first_valid_frame = True
-                    print("  ✅ First valid frame captured!")
                 
                 # Store frame
                 with self.frame_lock:
@@ -231,9 +248,12 @@ class EnhancedCameraYOLO:
                 self.fps_counter.append(fps)
                 self.last_time = current_time
                 
-                if success_count % 30 == 0:
+                # Log progress
+                if success_count == 1:
+                    print(f"  ✅ First frame captured! (brightness: {mean_brightness:.1f})")
+                elif success_count % 30 == 0:
                     avg_fps = np.mean(list(self.fps_counter)) if self.fps_counter else 0
-                    print(f"  ✅ Captured {self.frame_count} frames | {avg_fps:.1f} FPS")
+                    print(f"  ✅ Captured {self.frame_count} frames | {avg_fps:.1f} FPS | brightness: {mean_brightness:.1f}")
                 
             except Exception as e:
                 print(f"  ❌ Capture error: {e}")
@@ -242,8 +262,8 @@ class EnhancedCameraYOLO:
         
         print("  🛑 Capture thread stopped")
     
-    def _generate_placeholder(self):
-        """Generate test pattern"""
+    def _generate_placeholder(self, message="Waiting for camera..."):
+        """Generate placeholder with custom message"""
         frame = np.zeros((config.CAMERA_RESOLUTION[1], 
                          config.CAMERA_RESOLUTION[0], 3), dtype=np.uint8)
         
@@ -252,7 +272,7 @@ class EnhancedCameraYOLO:
             frame[i, :] = [20 + i//8, 15 + i//10, 35 + i//12]
         
         # Draw messages
-        cv2.putText(frame, "Waiting for camera...", (100, 200),
+        cv2.putText(frame, message, (100, 200),
                    cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 165, 255), 2)
         cv2.putText(frame, "Auto-exposure in progress", (80, 260),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (100, 200, 255), 2)
@@ -287,7 +307,7 @@ class EnhancedCameraYOLO:
                     conf=config.YOLO_CONFIDENCE_THRESHOLD,
                     iou=config.YOLO_IOU_THRESHOLD,
                     verbose=False,
-                    device=0  # 0 for CPU
+                    device='cpu'
                 )
                 
                 detections = []
@@ -368,13 +388,12 @@ class EnhancedCameraYOLO:
         """Get frame with bounding boxes and annotations"""
         with self.frame_lock:
             if self.frame is None:
-                # Return placeholder if no frame available yet
-                return self._generate_placeholder()
+                return self._generate_placeholder("Initializing camera...")
             frame = self.frame.copy()
         
-        # Validate frame before processing
+        # Validate frame
         if frame is None or frame.size == 0:
-            return self._generate_placeholder()
+            return self._generate_placeholder("No frame available")
         
         with self.detection_lock:
             detections = self.detections.copy()
@@ -449,7 +468,8 @@ class EnhancedCameraYOLO:
         return {
             'fps': round(avg_fps, 1),
             'detections_count': len(self.detections),
-            'model_loaded': self.model_loaded
+            'model_loaded': self.model_loaded,
+            'camera_ready': self.camera_ready
         }
     
     def cleanup(self):
