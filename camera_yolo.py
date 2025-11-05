@@ -66,20 +66,28 @@ class EnhancedCameraYOLO:
                 model_path = 'yolov8n.pt'
             
             # Load model
+            print(f"     ⏳ Loading {model_path}...")
             self.model = YOLO(model_path)
+            print(f"     ✅ Model loaded")
             
             # Move to CPU (safer for Raspberry Pi)
+            print(f"     ⏳ Moving to CPU...")
             self.model.to('cpu')
+            print(f"     ✅ Model on CPU")
             
             # Test inference on dummy image
-            dummy_image = np.zeros((640, 480, 3), dtype=np.uint8)
-            _ = self.model(dummy_image, verbose=False)
+            print(f"     ⏳ Running test inference...")
+            dummy_image = np.zeros((480, 640, 3), dtype=np.uint8)
+            results = self.model(dummy_image, verbose=False)
+            print(f"     ✅ Test inference OK ({len(results)} result(s))")
             
             self.model_loaded = True
             print("  ✅ YOLOv8 model loaded successfully")
             
         except Exception as e:
             print(f"  ❌ YOLO loading error: {e}")
+            import traceback
+            traceback.print_exc()
             print("     💡 Fix: Try running: pip install --upgrade ultralytics")
             self.model_loaded = False
     
