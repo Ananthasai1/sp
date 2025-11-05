@@ -84,16 +84,15 @@ class EnhancedCameraYOLO:
             self.model_loaded = False
     
     def _init_camera(self):
-        """Initialize camera - libcamera preferred"""
-        camera_found = False
+        """Initialize camera with OpenCV + libcamera"""
+        print("  📹 Initializing OpenCV with libcamera...")
         
-        # Try OpenCV with libcamera
         try:
-            print("  📹 Initializing OpenCV with libcamera...")
-            self.camera = cv2.VideoCapture(0, cv2.CAP_V4L2)
+            # Try OpenCV with default backend
+            self.camera = cv2.VideoCapture(0)
             
             if not self.camera.isOpened():
-                raise Exception("Cannot open camera with V4L2")
+                raise Exception("Cannot open camera device")
             
             # Set properties
             self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, config.CAMERA_RESOLUTION[0])
@@ -105,23 +104,19 @@ class EnhancedCameraYOLO:
             print("     🔄 Warmup frames...")
             for i in range(10):
                 ret, _ = self.camera.read()
-                print(f"     {'✅' if ret else '❌'} Warmup {i+1}/10")
+                if ret:
+                    print(f"     ✅ Warmup {i+1}/10")
                 time.sleep(0.1)
             
-            print("  ✅ OpenCV camera ready (libcamera)")
-            camera_found = True
+            print("  ✅ OpenCV camera ready (libcamera backend)")
             self.camera_type = 'opencv'
             
         except Exception as e:
-            print(f"  ⚠️  OpenCV initialization failed: {e}")
-            self.camera = None
-        
-        if not camera_found:
-            print("  ❌ No camera available!")
+            print(f"  ❌ Camera initialization failed: {e}")
             print("  Possible fixes:")
-            print("     1. Enable camera: sudo raspi-config → Camera → Enable")
-            print("     2. Check: libcamera-hello -t 5000")
-            print("     3. Verify: ls -la /dev/video*")
+            print("     1. Enable camera: sudo raspi-config → Interface → Camera → Enable")
+            print("     2. Test: libcamera-hello -t 3000")
+            print("     3. Check devices: ls -la /dev/video*")
             self.camera = None
             self.camera_type = 'none'
     
@@ -403,4 +398,3 @@ class EnhancedCameraYOLO:
                 self.camera.release()
             except:
                 pass
-            
