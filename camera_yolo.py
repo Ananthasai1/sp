@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Enhanced Camera and YOLOv8 Object Detection Module
-FIXED: Using Picamera2 for Raspberry Pi OS (rpicam)
+Camera and YOLOv8 Module for OV5647 on Raspberry Pi OS 64-bit
+Uses Picamera2 (new camera stack)
 """
 
 import cv2
@@ -12,17 +12,19 @@ from collections import deque
 import os
 import sys
 
-# Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
 
+# Import camera library
 try:
     from picamera2 import Picamera2
+    from libcamera import controls
     PICAMERA2_AVAILABLE = True
 except ImportError:
     PICAMERA2_AVAILABLE = False
-    print("⚠️  Picamera2 not available - trying OpenCV fallback")
+    print("⚠️  Picamera2 not available")
 
+# Import YOLO
 try:
     from ultralytics import YOLO
     YOLO_AVAILABLE = True
@@ -32,8 +34,8 @@ except ImportError:
 
 class EnhancedCameraYOLO:
     def __init__(self):
-        """Initialize camera and YOLO"""
-        print("  🔷 Initializing camera system...")
+        """Initialize OV5647 camera and YOLO detection"""
+        print("  🔷 Initializing OV5647 camera system...")
         
         self.camera = None
         self.frame = None
@@ -59,99 +61,99 @@ class EnhancedCameraYOLO:
         if YOLO_AVAILABLE:
             self._load_yolo_model()
         
-        print("  ✅ Camera initialized")
+        print("  ✅ Camera system initialized")
     
     def _load_yolo_model(self):
-        """Load YOLOv8 model with proper error handling"""
+        """Load YOLOv8 nano model"""
         try:
             print("  🧠 Loading YOLOv8 model...")
             
             model_path = config.YOLO_MODEL_PATH
             
-            if os.path.exists(model_path):
-                print(f"     ℹ️  Using local model: {model_path}")
-            else:
-                print(f"     ⚠️  Model not found at {model_path}")
-                print("     📥 Downloading YOLOv8n from Ultralytics...")
+            if not os.path.exists(model_path):
+                print("     📥 Downloading YOLOv8n...")
                 model_path = 'yolov8n.pt'
             
-            print(f"     ⏳ Loading {model_path}...")
             self.model = YOLO(model_path)
-            print(f"     ✅ Model loaded")
-            
-            print(f"     ⏳ Moving to CPU...")
             self.model.to('cpu')
-            print(f"     ✅ Model on CPU")
             
-            print(f"     ⏳ Running test inference...")
-            dummy_image = np.zeros((480, 640, 3), dtype=np.uint8)
-            results = self.model(dummy_image, verbose=False)
-            print(f"     ✅ Test inference OK ({len(results)} result(s))")
+            # Test inference
+            dummy = np.zeros((480, 640, 3), dtype=np.uint8)
+            self.model(dummy, verbose=False)
             
             self.model_loaded = True
-            print("  ✅ YOLOv8 model loaded successfully")
+            print("  ✅ YOLOv8 model ready")
             
         except Exception as e:
-            print(f"  ❌ YOLO loading error: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"  ❌ YOLO error: {e}")
             self.model_loaded = False
     
     def _init_camera(self):
-        """Initialize camera with Picamera2"""
-        print("  📹 Initializing camera with Picamera2...")
+        """Initialize OV5647 camera with Picamera2"""
         
         if not PICAMERA2_AVAILABLE:
-            print("  ❌ Picamera2 not available")
-            print("  💡 Install: sudo apt install -y python3-picamera2")
-            self.camera = None
+            print("  ❌ Picamera2 not installed")
+            print("  💡 Run: sudo apt install -y python3-picamera2")
             self.camera_type = 'none'
-            self.camera_ready = False
             return
         
         try:
-            # Initialize Picamera2
+            print("  📹 Initializing OV5647 with Picamera2...")
+            
+            # Create camera instance
             self.camera = Picamera2()
             
-            # Configure camera
-            camera_config = self.camera.create_still_configuration(
+            # Configure for video streaming
+            config_dict = self.camera.create_video_configuration(
                 main={"size": config.CAMERA_RESOLUTION, "format": "RGB888"},
-                buffer_count=2
+                controls={
+                    "FrameRate": config.CAMERA_FPS,
+                    "ExposureTime": 20000,  # 20ms exposure
+                    "AnalogueGain": 2.0,
+                },
+                buffer_count=config.FRAME_BUFFER_SIZE
             )
-            self.camera.configure(camera_config)
+            
+            self.camera.configure(config_dict)
+            
+            # Set additional controls for OV5647
+            self.camera.set_controls({
+                "AeEnable": True,  # Auto exposure
+                "AwbEnable": True,  # Auto white balance
+                "Brightness": 0.0,
+                "Contrast": 1.0,
+            })
             
             # Start camera
             print("     ⏳ Starting camera...")
             self.camera.start()
             
-            # Wait for camera to warm up
-            print("     ⏳ Camera warming up (5 seconds)...")
-            time.sleep(5)
+            # Warm-up period
+            print("     ⏳ Warming up (3 seconds)...")
+            time.sleep(3)
             
             # Capture test frame
-            print("     ⏳ Capturing test frame...")
             test_frame = self.camera.capture_array()
             
             if test_frame is not None and test_frame.size > 0:
-                mean_brightness = test_frame.mean()
-                print(f"     ✅ Test frame captured! (brightness: {mean_brightness:.1f})")
+                brightness = test_frame.mean()
+                print(f"     ✅ Camera ready! (brightness: {brightness:.1f})")
                 self.camera_ready = True
             else:
-                print("     ⚠️  Test frame failed")
-                self.camera_ready = True  # Continue anyway
+                print("     ⚠️  Warning: Test frame empty")
+                self.camera_ready = True
             
-            print("  ✅ Picamera2 initialized")
             self.camera_type = 'picamera2'
+            print("  ✅ OV5647 camera initialized")
             
         except Exception as e:
-            print(f"  ❌ Camera initialization failed: {e}")
-            import traceback
-            traceback.print_exc()
-            print("  Possible fixes:")
-            print("     1. Install: sudo apt install -y python3-picamera2")
-            print("     2. Enable camera: sudo raspi-config → Interface → Camera")
-            print("     3. Test: rpicam-hello -t 5000")
-            print("     4. Reboot: sudo reboot")
+            print(f"  ❌ Camera init failed: {e}")
+            print("\n  Troubleshooting:")
+            print("     1. Check cable connection")
+            print("     2. Run: rpicam-hello -t 5000")
+            print("     3. Enable camera: sudo raspi-config")
+            print("     4. Check /boot/config.txt has camera_auto_detect=1")
+            print("     5. Reboot if needed")
             
             if self.camera:
                 try:
@@ -165,32 +167,27 @@ class EnhancedCameraYOLO:
     
     def _capture_frames(self):
         """Continuous frame capture thread"""
-        print("  🎥 Capture thread started")
-        frame_errors = 0
-        success_count = 0
+        print("  🎥 Frame capture started")
         
-        # Wait for camera to be ready
-        if not self.camera_ready:
-            print("  ⏳ Waiting for camera to be ready...")
-            time.sleep(2)
+        errors = 0
+        success = 0
         
         while self.capture_running:
             try:
-                if self.camera is None or self.camera_type == 'none':
-                    # No camera - show placeholder
+                if self.camera is None:
                     frame = self._generate_placeholder("Camera not available")
                     with self.frame_lock:
                         self.frame = frame
-                    time.sleep(1/config.CAMERA_FPS)
+                    time.sleep(0.1)
                     continue
                 
-                # Capture frame from Picamera2
+                # Capture frame
                 frame = self.camera.capture_array()
                 
                 if frame is None or frame.size == 0:
-                    frame_errors += 1
-                    if frame_errors > 10:
-                        print("  ⚠️  Camera capture failed - trying to restart...")
+                    errors += 1
+                    if errors > 10:
+                        print("  ⚠️  Too many errors, restarting camera...")
                         try:
                             self.camera.stop()
                             time.sleep(1)
@@ -198,18 +195,17 @@ class EnhancedCameraYOLO:
                             time.sleep(2)
                         except:
                             pass
-                        frame_errors = 0
+                        errors = 0
                     time.sleep(0.05)
                     continue
                 
-                # Reset error counter on success
-                frame_errors = 0
+                errors = 0
                 
-                # Ensure correct resolution
-                if frame.shape[0] != config.CAMERA_RESOLUTION[1] or frame.shape[1] != config.CAMERA_RESOLUTION[0]:
+                # Resize if needed
+                if frame.shape[:2] != (config.CAMERA_RESOLUTION[1], config.CAMERA_RESOLUTION[0]):
                     frame = cv2.resize(frame, config.CAMERA_RESOLUTION)
                 
-                # Convert RGB to BGR for OpenCV compatibility
+                # Convert RGB to BGR for OpenCV
                 frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
                 
                 # Store frame
@@ -217,65 +213,48 @@ class EnhancedCameraYOLO:
                     self.frame = frame.copy()
                 
                 self.frame_count += 1
-                success_count += 1
+                success += 1
                 
                 # Calculate FPS
-                current_time = time.time()
-                fps = 1.0 / (current_time - self.last_time + 0.001)
+                current = time.time()
+                fps = 1.0 / (current - self.last_time + 0.001)
                 self.fps_counter.append(fps)
-                self.last_time = current_time
+                self.last_time = current
                 
                 # Log progress
-                if success_count == 1:
-                    mean_brightness = frame.mean()
-                    print(f"  ✅ First frame captured! (brightness: {mean_brightness:.1f})")
-                elif success_count % 30 == 0:
+                if success == 1:
+                    print(f"  ✅ First frame captured!")
+                elif success % 50 == 0:
                     avg_fps = np.mean(list(self.fps_counter)) if self.fps_counter else 0
-                    mean_brightness = frame.mean()
-                    print(f"  ✅ Captured {self.frame_count} frames | {avg_fps:.1f} FPS | brightness: {mean_brightness:.1f}")
+                    print(f"  📊 Frames: {self.frame_count} | FPS: {avg_fps:.1f}")
                 
-                # Small delay to control frame rate
-                time.sleep(0.01)
+                # Control frame rate
+                time.sleep(1.0 / config.CAMERA_FPS)
                 
             except Exception as e:
                 print(f"  ❌ Capture error: {e}")
-                frame_errors += 1
+                errors += 1
                 time.sleep(0.1)
         
-        print("  🛑 Capture thread stopped")
-    
-    def _generate_placeholder(self, message="Waiting for camera..."):
-        """Generate placeholder with custom message"""
-        frame = np.zeros((config.CAMERA_RESOLUTION[1], 
-                         config.CAMERA_RESOLUTION[0], 3), dtype=np.uint8)
-        
-        # Create gradient background
-        for i in range(frame.shape[0]):
-            frame[i, :] = [20 + i//8, 15 + i//10, 35 + i//12]
-        
-        # Draw messages
-        cv2.putText(frame, message, (100, 200),
-                   cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 165, 255), 2)
-        cv2.putText(frame, "Check camera connection", (80, 260),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (100, 200, 255), 2)
-        cv2.putText(frame, "rpicam-hello -t 5000", (120, 320),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (150, 150, 255), 1)
-        
-        return frame
+        print("  🛑 Frame capture stopped")
     
     def _yolo_detection_thread(self):
-        """YOLOv8 detection thread"""
-        print("  🔍 Detection thread started")
+        """YOLO detection thread"""
+        print("  🔍 YOLO detection started")
         
-        if not self.model_loaded or self.model is None:
-            print("  ⚠️  Detection unavailable - model not loaded")
-            self.detection_running = False
+        if not self.model_loaded:
+            print("  ⚠️  YOLO not available")
             return
         
-        detection_errors = 0
+        last_detection = 0
         
         while self.detection_running:
             try:
+                # Limit detection frequency
+                if time.time() - last_detection < config.DETECTION_INTERVAL:
+                    time.sleep(0.01)
+                    continue
+                
                 if self.frame is None:
                     time.sleep(0.05)
                     continue
@@ -283,7 +262,7 @@ class EnhancedCameraYOLO:
                 with self.frame_lock:
                     frame = self.frame.copy()
                 
-                # Run YOLOv8 inference
+                # Run YOLO
                 results = self.model(
                     frame,
                     conf=config.YOLO_CONFIDENCE_THRESHOLD,
@@ -297,42 +276,48 @@ class EnhancedCameraYOLO:
                 if len(results) > 0:
                     for result in results:
                         boxes = result.boxes
-                        
                         for box in boxes:
-                            # Extract coordinates
                             x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
                             conf = float(box.conf[0].cpu().numpy())
                             cls = int(box.cls[0].cpu().numpy())
                             
-                            # Get class name
-                            class_name = self.model.names[cls]
-                            
-                            detection = {
-                                'class': class_name,
+                            detections.append({
+                                'class': self.model.names[cls],
                                 'confidence': round(conf, 3),
                                 'bbox': [int(x1), int(y1), int(x2), int(y2)],
                                 'center_x': int((x1 + x2) / 2),
                                 'center_y': int((y1 + y2) / 2)
-                            }
-                            detections.append(detection)
+                            })
                 
                 with self.detection_lock:
                     self.detections = detections
                 
-                detection_errors = 0
-                time.sleep(0.05)
+                last_detection = time.time()
                 
             except Exception as e:
-                detection_errors += 1
-                if detection_errors > 5:
-                    print(f"  ❌ Detection error: {e}")
-                    detection_errors = 0
+                print(f"  ❌ Detection error: {e}")
                 time.sleep(0.1)
         
-        print("  🛑 Detection thread stopped")
+        print("  🛑 YOLO detection stopped")
+    
+    def _generate_placeholder(self, message="Waiting..."):
+        """Generate placeholder frame"""
+        frame = np.zeros((config.CAMERA_RESOLUTION[1], 
+                         config.CAMERA_RESOLUTION[0], 3), dtype=np.uint8)
+        
+        # Gradient background
+        for i in range(frame.shape[0]):
+            frame[i, :] = [20 + i//8, 15 + i//10, 35 + i//12]
+        
+        cv2.putText(frame, message, (100, 200),
+                   cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 165, 255), 2)
+        cv2.putText(frame, "Check camera connection", (80, 260),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (100, 200, 255), 2)
+        
+        return frame
     
     def start_detection(self):
-        """Start capture and detection"""
+        """Start camera and detection threads"""
         if self.is_running:
             return
         
@@ -340,24 +325,14 @@ class EnhancedCameraYOLO:
         self.capture_running = True
         self.detection_running = True
         
-        # Start capture thread
-        capture_thread = threading.Thread(
-            target=self._capture_frames,
-            daemon=True,
-            name="CameraCapture"
-        )
-        capture_thread.start()
+        # Capture thread
+        threading.Thread(target=self._capture_frames, daemon=True, name="Capture").start()
         
-        # Start detection thread if model is available
-        if self.model_loaded and self.model is not None:
-            detection_thread = threading.Thread(
-                target=self._yolo_detection_thread,
-                daemon=True,
-                name="YOLODetection"
-            )
-            detection_thread.start()
+        # Detection thread
+        if self.model_loaded:
+            threading.Thread(target=self._yolo_detection_thread, daemon=True, name="YOLO").start()
         
-        print("  ✅ Detection started")
+        print("  ✅ Detection system started")
     
     def stop_detection(self):
         """Stop all threads"""
@@ -367,88 +342,67 @@ class EnhancedCameraYOLO:
         self.is_running = False
     
     def get_frame_with_detections(self):
-        """Get frame with bounding boxes and annotations"""
+        """Get annotated frame"""
         with self.frame_lock:
             if self.frame is None:
-                return self._generate_placeholder("Initializing camera...")
+                return self._generate_placeholder("Initializing...")
             frame = self.frame.copy()
-        
-        # Validate frame
-        if frame is None or frame.size == 0:
-            return self._generate_placeholder("No frame available")
         
         with self.detection_lock:
             detections = self.detections.copy()
         
-        # Draw bounding boxes and labels
+        # Draw bounding boxes
         for det in detections:
             x1, y1, x2, y2 = det['bbox']
             conf = det['confidence']
-            class_name = det['class']
+            label = det['class']
             
-            # Color code by confidence
-            if conf > 0.8:
-                color = (0, 255, 0)  # Green
-            elif conf > 0.6:
-                color = (0, 165, 255)  # Orange
-            else:
-                color = (0, 0, 255)  # Red
+            # Color by confidence
+            color = (0, 255, 0) if conf > 0.7 else (0, 165, 255) if conf > 0.5 else (0, 0, 255)
             
-            # Draw rectangle
+            # Draw box
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
             
             # Draw label
-            label = f"{class_name}: {conf:.2f}"
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            text_size = cv2.getTextSize(label, font, 0.6, 2)[0]
-            
-            # Label background
-            bg_x1, bg_y1 = x1, y1 - text_size[1] - 8
-            bg_x2, bg_y2 = x1 + text_size[0] + 8, y1
-            cv2.rectangle(frame, (bg_x1, bg_y1), (bg_x2, bg_y2), color, -1)
-            cv2.putText(frame, label, (x1 + 4, y1 - 4), font, 0.6, (0, 0, 0), 2)
+            text = f"{label}: {conf:.2f}"
+            size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
+            cv2.rectangle(frame, (x1, y1-size[1]-8), (x1+size[0]+8, y1), color, -1)
+            cv2.putText(frame, text, (x1+4, y1-4), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
         
-        # Add overlay info
+        # Add overlay
         frame = self._add_overlay(frame, len(detections))
         
         return frame
     
-    def _add_overlay(self, frame, det_count):
-        """Add FPS and detection count overlay"""
+    def _add_overlay(self, frame, count):
+        """Add FPS and detection count"""
         h, w = frame.shape[:2]
-        avg_fps = np.mean(list(self.fps_counter)) if self.fps_counter else 0
+        fps = np.mean(list(self.fps_counter)) if self.fps_counter else 0
         
-        # FPS counter
-        cv2.putText(frame, f"FPS: {avg_fps:.1f}", (10, 30), 
+        cv2.putText(frame, f"FPS: {fps:.1f}", (10, 30), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        
-        # Detection count
-        cv2.putText(frame, f"Objects: {det_count}", (10, 65), 
+        cv2.putText(frame, f"Objects: {count}", (10, 65), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 212, 255), 2)
-        
-        # Model indicator
-        cv2.putText(frame, "YOLOv8", (w - 150, 30), 
+        cv2.putText(frame, "OV5647", (w-150, 30), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2)
         
         return frame
     
     def get_frame(self):
-        """Get current frame without detections"""
+        """Get raw frame"""
         with self.frame_lock:
-            if self.frame is not None:
-                return self.frame.copy()
-            return None
+            return self.frame.copy() if self.frame is not None else None
     
     def get_detections(self):
-        """Get current detections list"""
+        """Get current detections"""
         with self.detection_lock:
             return self.detections.copy()
     
     def get_performance_stats(self):
-        """Get performance statistics"""
-        avg_fps = np.mean(list(self.fps_counter)) if self.fps_counter else 0
+        """Get statistics"""
+        fps = np.mean(list(self.fps_counter)) if self.fps_counter else 0
         return {
-            'fps': round(avg_fps, 1),
+            'fps': round(fps, 1),
             'detections_count': len(self.detections),
             'model_loaded': self.model_loaded,
             'camera_ready': self.camera_ready
@@ -456,10 +410,11 @@ class EnhancedCameraYOLO:
     
     def cleanup(self):
         """Cleanup resources"""
-        print("  Cleaning up camera...")
+        print("  🧹 Cleaning up camera...")
         self.stop_detection()
         if self.camera and self.camera_type == 'picamera2':
             try:
                 self.camera.stop()
+                self.camera.close()
             except:
                 pass

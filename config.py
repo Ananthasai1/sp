@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 Configuration settings for CyberCrawl Spider Robot
-Updated for YOLOv8
+Updated for Raspberry Pi OS 64-bit with OV5647
 """
 
 # Flask Server Settings
-SERVER_HOST = '0.0.0.0'  # Listen on all interfaces
+SERVER_HOST = '0.0.0.0'
 SERVER_PORT = 5000
-DEBUG = False  # Set to False in production
+DEBUG = False
 
 # GPIO Pin Assignments
 ULTRASONIC_TRIGGER_PIN = 23
@@ -15,11 +15,9 @@ ULTRASONIC_ECHO_PIN = 24
 
 # PCA9685 Servo Driver Settings
 PCA9685_ADDRESS = 0x40
-PCA9685_FREQUENCY = 50  # Hz (standard for servos)
+PCA9685_FREQUENCY = 50
 
 # Servo Channel Mapping [leg][joint]
-# Leg numbering: 0=Front-Right, 1=Front-Left, 2=Rear-Left, 3=Rear-Right
-# Joint numbering: 0=Coxa, 1=Femur, 2=Tibia
 SERVO_CHANNELS = [
     [0, 1, 2],    # Leg 0 (Front-Right)
     [4, 5, 6],    # Leg 1 (Front-Left)
@@ -28,19 +26,19 @@ SERVO_CHANNELS = [
 ]
 
 # Robot Physical Dimensions (mm)
-LENGTH_A = 55.0      # Upper leg length
-LENGTH_B = 77.5      # Lower leg length
-LENGTH_C = 27.5      # Coxa length
-LENGTH_SIDE = 71.0   # Body side length
+LENGTH_A = 55.0
+LENGTH_B = 77.5
+LENGTH_C = 27.5
+LENGTH_SIDE = 71.0
 
 # Movement Parameters
-Z_DEFAULT = -50.0    # Default standing height
-Z_UP = -30.0         # Leg lift height
-Z_BOOT = -28.0       # Boot/sit position
-X_DEFAULT = 62.0     # Default X position
-X_OFFSET = 0.0       # X offset for body
-Y_START = 0.0        # Starting Y position
-Y_STEP = 40.0        # Step length
+Z_DEFAULT = -50.0
+Z_UP = -30.0
+Z_BOOT = -28.0
+X_DEFAULT = 62.0
+X_OFFSET = 0.0
+Y_START = 0.0
+Y_STEP = 40.0
 
 # Movement Speeds
 LEG_MOVE_SPEED = 8.0
@@ -50,27 +48,28 @@ STAND_SEAT_SPEED = 1.0
 SPEED_MULTIPLE = 1.2
 
 # Ultrasonic Sensor Settings
-OBSTACLE_THRESHOLD = 20  # cm - distance to trigger avoidance
-MAX_DISTANCE = 200       # cm - maximum detection range
+OBSTACLE_THRESHOLD = 20
+MAX_DISTANCE = 200
 
-# Camera Settings
+# Camera Settings (OV5647 optimal settings)
 CAMERA_RESOLUTION = (640, 480)
-CAMERA_FPS = 30
+CAMERA_FPS = 20  # Lower FPS for better stability on Pi 3
 
-# ===== YOLOv8 Detection Settings =====
-# Use yolov8n.pt (nano - smallest & fastest)
-# Other options: yolov8s.pt, yolov8m.pt, yolov8l.pt (larger = slower but more accurate)
-YOLO_MODEL_PATH = 'yolov8n.pt'  # Path to YOLO model file
-YOLO_CONFIDENCE_THRESHOLD = 0.5   # 0.5 = 50% confidence minimum
-YOLO_IOU_THRESHOLD = 0.45         # Intersection over Union threshold
+# YOLOv8 Detection Settings
+YOLO_MODEL_PATH = 'yolov8n.pt'
+YOLO_CONFIDENCE_THRESHOLD = 0.5
+YOLO_IOU_THRESHOLD = 0.45
+
+# Performance Settings
+DETECTION_INTERVAL = 0.1  # Run YOLO every 100ms
+FRAME_BUFFER_SIZE = 2
 
 # Night Vision Settings
-NIGHT_VISION_THRESHOLD = 50  # Brightness threshold for night mode
-NIGHT_VISION_GPIO = 18       # GPIO pin for IR LEDs (if used)
+NIGHT_VISION_THRESHOLD = 50
+NIGHT_VISION_GPIO = 18
 
 # Auto Mode Settings
-AUTO_MODE_LOOP_DELAY = 0.05  # seconds between sensor readings
+AUTO_MODE_LOOP_DELAY = 0.05
 
 # Servo Calibration
-# Format: [min_pulse, max_pulse] for 0-180 degrees
-SERVO_PULSE_RANGE = [150, 600]  # Typical SG90 servo values
+SERVO_PULSE_RANGE = [150, 600]
