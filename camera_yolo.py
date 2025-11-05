@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Enhanced Camera and YOLOv8 Object Detection Module
-FIXED: Better auto-exposure handling for libcamera
+FIXED: Using Picamera2 for Raspberry Pi OS (rpicam)
 """
 
 import cv2
@@ -15,6 +15,13 @@ import sys
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
+
+try:
+    from picamera2 import Picamera2
+    PICAMERA2_AVAILABLE = True
+except ImportError:
+    PICAMERA2_AVAILABLE = False
+    print("⚠️  Picamera2 not available - trying OpenCV fallback")
 
 try:
     from ultralytics import YOLO
@@ -37,7 +44,7 @@ class EnhancedCameraYOLO:
         self.is_running = False
         self.capture_running = False
         self.detection_running = False
-        self.camera_ready = False  # NEW: Track camera readiness
+        self.camera_ready = False
         
         self.fps_counter = deque(maxlen=30)
         self.last_time = time.time()
@@ -59,7 +66,6 @@ class EnhancedCameraYOLO:
         try:
             print("  🧠 Loading YOLOv8 model...")
             
-            # Check if model file exists
             model_path = config.YOLO_MODEL_PATH
             
             if os.path.exists(model_path):
@@ -69,17 +75,14 @@ class EnhancedCameraYOLO:
                 print("     📥 Downloading YOLOv8n from Ultralytics...")
                 model_path = 'yolov8n.pt'
             
-            # Load model
             print(f"     ⏳ Loading {model_path}...")
             self.model = YOLO(model_path)
             print(f"     ✅ Model loaded")
             
-            # Move to CPU (safer for Raspberry Pi)
             print(f"     ⏳ Moving to CPU...")
             self.model.to('cpu')
             print(f"     ✅ Model on CPU")
             
-            # Test inference on dummy image
             print(f"     ⏳ Running test inference...")
             dummy_image = np.zeros((480, 640, 3), dtype=np.uint8)
             results = self.model(dummy_image, verbose=False)
@@ -92,96 +95,76 @@ class EnhancedCameraYOLO:
             print(f"  ❌ YOLO loading error: {e}")
             import traceback
             traceback.print_exc()
-            print("     💡 Fix: Try running: pip install --upgrade ultralytics")
             self.model_loaded = False
     
     def _init_camera(self):
-        """Initialize camera with OpenCV + libcamera - IMPROVED"""
-        print("  📹 Initializing OpenCV with libcamera...")
+        """Initialize camera with Picamera2"""
+        print("  📹 Initializing camera with Picamera2...")
+        
+        if not PICAMERA2_AVAILABLE:
+            print("  ❌ Picamera2 not available")
+            print("  💡 Install: sudo apt install -y python3-picamera2")
+            self.camera = None
+            self.camera_type = 'none'
+            self.camera_ready = False
+            return
         
         try:
-            # Try OpenCV with default backend
-            self.camera = cv2.VideoCapture(0)
+            # Initialize Picamera2
+            self.camera = Picamera2()
             
-            if not self.camera.isOpened():
-                raise Exception("Cannot open camera device")
+            # Configure camera
+            camera_config = self.camera.create_still_configuration(
+                main={"size": config.CAMERA_RESOLUTION, "format": "RGB888"},
+                buffer_count=2
+            )
+            self.camera.configure(camera_config)
             
-            # Set properties BEFORE reading frames
-            self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, config.CAMERA_RESOLUTION[0])
-            self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAMERA_RESOLUTION[1])
-            self.camera.set(cv2.CAP_PROP_FPS, config.CAMERA_FPS)
-            self.camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            # Start camera
+            print("     ⏳ Starting camera...")
+            self.camera.start()
             
-            # IMPROVED: Set exposure settings more aggressively
-            self.camera.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)  # Enable auto exposure
-            self.camera.set(cv2.CAP_PROP_BRIGHTNESS, 55)
-            self.camera.set(cv2.CAP_PROP_CONTRAST, 50)
+            # Wait for camera to warm up
+            print("     ⏳ Camera warming up (5 seconds)...")
+            time.sleep(5)
             
-            print("     ⏳ Warming up camera (15 seconds for auto-exposure)...")
-            print("     💡 This is normal for libcamera - please wait...")
+            # Capture test frame
+            print("     ⏳ Capturing test frame...")
+            test_frame = self.camera.capture_array()
             
-            # IMPROVED: Longer, more patient warmup
-            warmup_time = 15  # seconds
-            start_time = time.time()
-            frames_captured = 0
-            valid_frames = 0
-            
-            while (time.time() - start_time) < warmup_time:
-                ret, frame = self.camera.read()
-                frames_captured += 1
-                
-                if ret and frame is not None and frame.size > 0:
-                    # Check if frame is valid (not all black)
-                    mean_brightness = frame.mean()
-                    
-                    if mean_brightness > 5:  # LOWERED threshold
-                        valid_frames += 1
-                        
-                        # If we get 3 valid frames in a row, camera is ready
-                        if valid_frames >= 3:
-                            print(f"     ✅ Camera ready after {time.time() - start_time:.1f}s!")
-                            print(f"     📊 Captured {frames_captured} frames, {valid_frames} valid")
-                            
-                            # Discard a few more frames to stabilize
-                            for _ in range(10):
-                                self.camera.read()
-                                time.sleep(0.05)
-                            
-                            self.camera_ready = True
-                            break
-                    else:
-                        valid_frames = 0  # Reset counter if we get a black frame
-                
-                # Show progress every 2 seconds
-                elapsed = time.time() - start_time
-                if int(elapsed) % 2 == 0 and frames_captured % 10 == 0:
-                    print(f"     ⏳ Warmup: {elapsed:.0f}s / {warmup_time}s (brightness: {mean_brightness:.1f})")
-                
-                time.sleep(0.1)
-            
-            # Check if camera is ready
-            if not self.camera_ready:
-                print("     ⚠️  Camera warmup complete but frames may be dark")
-                print("     💡 Camera will continue warming up in background")
-                # Set flag anyway - will improve over time
+            if test_frame is not None and test_frame.size > 0:
+                mean_brightness = test_frame.mean()
+                print(f"     ✅ Test frame captured! (brightness: {mean_brightness:.1f})")
                 self.camera_ready = True
+            else:
+                print("     ⚠️  Test frame failed")
+                self.camera_ready = True  # Continue anyway
             
-            print("  ✅ OpenCV camera initialized (libcamera backend)")
-            self.camera_type = 'opencv'
+            print("  ✅ Picamera2 initialized")
+            self.camera_type = 'picamera2'
             
         except Exception as e:
             print(f"  ❌ Camera initialization failed: {e}")
+            import traceback
+            traceback.print_exc()
             print("  Possible fixes:")
-            print("     1. Enable camera: sudo raspi-config → Interface → Camera → Enable")
-            print("     2. Test: libcamera-hello -t 3000")
-            print("     3. Check devices: ls -la /dev/video*")
+            print("     1. Install: sudo apt install -y python3-picamera2")
+            print("     2. Enable camera: sudo raspi-config → Interface → Camera")
+            print("     3. Test: rpicam-hello -t 5000")
             print("     4. Reboot: sudo reboot")
+            
+            if self.camera:
+                try:
+                    self.camera.stop()
+                except:
+                    pass
+            
             self.camera = None
             self.camera_type = 'none'
             self.camera_ready = False
     
     def _capture_frames(self):
-        """Continuous frame capture thread - IMPROVED"""
+        """Continuous frame capture thread"""
         print("  🎥 Capture thread started")
         frame_errors = 0
         success_count = 0
@@ -193,7 +176,7 @@ class EnhancedCameraYOLO:
         
         while self.capture_running:
             try:
-                if self.camera is None:
+                if self.camera is None or self.camera_type == 'none':
                     # No camera - show placeholder
                     frame = self._generate_placeholder("Camera not available")
                     with self.frame_lock:
@@ -201,19 +184,20 @@ class EnhancedCameraYOLO:
                     time.sleep(1/config.CAMERA_FPS)
                     continue
                 
-                # Read frame
-                ret, frame = self.camera.read()
+                # Capture frame from Picamera2
+                frame = self.camera.capture_array()
                 
-                if not ret or frame is None or frame.size == 0:
+                if frame is None or frame.size == 0:
                     frame_errors += 1
                     if frame_errors > 10:
-                        print("  ⚠️  Camera read failed - reconnecting...")
+                        print("  ⚠️  Camera capture failed - trying to restart...")
                         try:
-                            self.camera.release()
+                            self.camera.stop()
+                            time.sleep(1)
+                            self.camera.start()
+                            time.sleep(2)
                         except:
                             pass
-                        time.sleep(1)
-                        self._init_camera()
                         frame_errors = 0
                     time.sleep(0.05)
                     continue
@@ -225,15 +209,8 @@ class EnhancedCameraYOLO:
                 if frame.shape[0] != config.CAMERA_RESOLUTION[1] or frame.shape[1] != config.CAMERA_RESOLUTION[0]:
                     frame = cv2.resize(frame, config.CAMERA_RESOLUTION)
                 
-                # IMPROVED: More lenient frame validation
-                mean_brightness = frame.mean()
-                
-                # Only reject completely invalid frames
-                if mean_brightness < 1.0:  # Almost completely black
-                    if success_count > 0:  # Only warn if we've had good frames before
-                        print(f"  ⚠️  Very dark frame (brightness: {mean_brightness:.1f})")
-                    time.sleep(0.05)
-                    continue
+                # Convert RGB to BGR for OpenCV compatibility
+                frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
                 
                 # Store frame
                 with self.frame_lock:
@@ -250,10 +227,15 @@ class EnhancedCameraYOLO:
                 
                 # Log progress
                 if success_count == 1:
+                    mean_brightness = frame.mean()
                     print(f"  ✅ First frame captured! (brightness: {mean_brightness:.1f})")
                 elif success_count % 30 == 0:
                     avg_fps = np.mean(list(self.fps_counter)) if self.fps_counter else 0
+                    mean_brightness = frame.mean()
                     print(f"  ✅ Captured {self.frame_count} frames | {avg_fps:.1f} FPS | brightness: {mean_brightness:.1f}")
+                
+                # Small delay to control frame rate
+                time.sleep(0.01)
                 
             except Exception as e:
                 print(f"  ❌ Capture error: {e}")
@@ -274,9 +256,9 @@ class EnhancedCameraYOLO:
         # Draw messages
         cv2.putText(frame, message, (100, 200),
                    cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 165, 255), 2)
-        cv2.putText(frame, "Auto-exposure in progress", (80, 260),
+        cv2.putText(frame, "Check camera connection", (80, 260),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (100, 200, 255), 2)
-        cv2.putText(frame, "This can take 10-30 seconds", (60, 320),
+        cv2.putText(frame, "rpicam-hello -t 5000", (120, 320),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (150, 150, 255), 1)
         
         return frame
@@ -476,8 +458,8 @@ class EnhancedCameraYOLO:
         """Cleanup resources"""
         print("  Cleaning up camera...")
         self.stop_detection()
-        if self.camera:
+        if self.camera and self.camera_type == 'picamera2':
             try:
-                self.camera.release()
+                self.camera.stop()
             except:
                 pass
