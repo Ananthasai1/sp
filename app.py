@@ -177,15 +177,16 @@ def get_status():
         distance = 150.0  # Placeholder
     else:
         detections = []
-        stats = {'fps': 0, 'detections_count': 0}
+        stats = {'fps': 0, 'detections_count': 0, 'model_loaded': False}
         distance = -1
     
     return jsonify({
         'mode': current_mode,
         'distance': distance,
         'detections': detections,
-        'fps': stats['fps'],
-        'detection_count': stats['detections_count'],
+        'fps': stats.get('fps', 0),
+        'detection_count': stats.get('detections_count', 0),
+        'model_loaded': stats.get('model_loaded', False),
         'timestamp': time.time()
     })
 
