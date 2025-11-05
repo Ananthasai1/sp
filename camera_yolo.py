@@ -156,6 +156,7 @@ class EnhancedCameraYOLO:
         print("  🎥 Capture thread started")
         frame_errors = 0
         success_count = 0
+        first_valid_frame = False
         
         while self.capture_running:
             try:
@@ -173,7 +174,10 @@ class EnhancedCameraYOLO:
                     frame_errors += 1
                     if frame_errors > 10:
                         print("  ⚠️  Camera read failed repeatedly - reconnecting...")
-                        self.camera.release()
+                        try:
+                            self.camera.release()
+                        except:
+                            pass
                         time.sleep(1)
                         self._init_camera()
                         frame_errors = 0
@@ -187,10 +191,14 @@ class EnhancedCameraYOLO:
                     frame = cv2.resize(frame, config.CAMERA_RESOLUTION)
                 
                 # Validate frame (check if not completely invalid)
-                # Skip frames that are all black (value < 5) but allow startup
+                # Skip frames that are all black (value < 3)
                 if frame.max() < 3:
+                    # Allow one chance for startup, then skip
+                    if not first_valid_frame:
+                        time.sleep(0.05)
+                        continue
                     frame_errors += 1
-                    if frame_errors > 20:  # Only error after many bad frames
+                    if frame_errors > 30:  # Only error after many bad frames
                         print("  ⚠️  Camera still producing black frames")
                         frame_errors = 0
                     time.sleep(0.05)
@@ -204,6 +212,11 @@ class EnhancedCameraYOLO:
                         frame_errors = 0
                     time.sleep(0.05)
                     continue
+                
+                # Mark first valid frame
+                if not first_valid_frame:
+                    first_valid_frame = True
+                    print("  ✅ First valid frame captured!")
                 
                 # Store frame
                 with self.frame_lock:

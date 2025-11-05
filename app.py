@@ -53,15 +53,19 @@ def generate_frames():
                 frame = camera.get_frame_with_detections()
                 
                 if frame is None:
-                    # Camera not ready yet
+                    # Fallback if frame is still None (shouldn't happen now)
                     frame = np.zeros((config.CAMERA_RESOLUTION[1], 
                                     config.CAMERA_RESOLUTION[0], 3), dtype=np.uint8)
-                    cv2.putText(frame, "Camera Initializing...", (100, 240),
+                    cv2.putText(frame, "Waiting for camera...", (100, 240),
                                cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 165, 255), 3)
+            
+            # Validate frame before encoding
+            if frame is None or frame.size == 0:
+                continue
             
             # Encode frame as JPEG
             ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
-            if ret:
+            if ret and buffer is not None:
                 frame_bytes = buffer.tobytes()
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
